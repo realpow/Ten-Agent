@@ -2,6 +2,9 @@ import streamlit as st
 import FinanceDataReader as fdr
 import pandas as pd
 import datetime
+import requests
+import re
+import io
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -16,33 +19,63 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# 타이틀 및 소개 리치 포맷팅
+# 타이틀 및 소개
 st.title("🤖 홍환님의 AI 종합 투자 에이전트")
 st.markdown("---")
 st.sidebar.header("⚙️ 검색 설정")
 st.sidebar.write("두 가지 퀀트 엔진 중 원하는 전략의 버튼을 누르면 전 종목을 실시간 분석합니다.")
 
-# 1. 공통 데이터 수집 (시총 2천억 이상만 선별)
-@st.cache_data(ttl=3600) # 1시간 동안은 데이터 재사용하여 속도 향상
+# [💡 우회 패치] 클라우드 서버 차단을 막기 위해 네이버 금융을 통해 시총 2천억 이상 안정적 수집
+@st.cache_data(ttl=3600) # 1시간 동안 데이터 캐싱
 def get_base_stocks():
-    df_krx = fdr.StockListing('KRX')
-    df_krx = df_krx[df_krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
+    stocks = []
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
-    # 시가총액 컬럼 매칭
-    marcap_col = None
-    for col in ['MarCap', 'marcap', 'MarketCap', '시가총액']:
-        if col in df_krx.columns:
-            marcap_col = col
-            break
+    for sosok in [0, 1]: # 0: 코스피, 1: 코스닥
+        market_name = 'KOSPI' if sosok == 0 else 'KOSDAQ'
+        for page in range(1, 25): # 상위 페이지 집중 탐색
+            url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+            res = requests.get(url, headers=headers)
+            html = res.content.decode('euc-kr', errors='ignore')
             
-    if marcap_col:
-        df_krx = df_krx[df_krx[marcap_col] >= 200000000000]
-    elif 'Close' in df_krx.columns and 'Stocks' in df_krx.columns:
-        df_krx['Calculated_MarCap'] = df_krx['Close'] * df_krx['Stocks']
-        df_krx = df_krx[df_krx['Calculated_MarCap'] >= 200000000000]
-        marcap_col = 'Calculated_MarCap'
-        
-    return df_krx, marcap_col
+            # 6자리 종목코드와 종목명 추출
+            page_codes = re.findall(r'href="/item/main\.naver\?code=(\d{6})"[^>]* class="tltle">([^<]+)</a>', html)
+            if not page_codes:
+                break
+                
+            # 테이블 파싱
+            dfs = pd.read_html(io.StringIO(html))
+            df_table = dfs[1].dropna(subset=['종목명'])
+            
+            # 시가총액 컬럼 매칭
+            marcap_col = None
+            for c in df_table.columns:
+                if '시가총액' in str(c):
+                    marcap_col = c
+                    break
+            
+            # 코드와 데이터 결합 및 2천억 필터링
+            for (code, name), (_, row) in zip(page_codes, df_table.iterrows()):
+                marcap_val = row[marcap_col] if marcap_col else 0
+                if pd.isna(marcap_val): continue
+                
+                if isinstance(marcap_val, str):
+                    marcap_val = int(re.sub(r'[^0-9]', '', marcap_val))
+                elif isinstance(marcap_val, (int, float)):
+                    marcap_val = int(marcap_val)
+                
+                # 네이버 시가총액 단위는 '억 원'이므로 2000(억) 이상만 필터링
+                if marcap_val >= 2000:
+                    stocks.append({
+                        'Code': code,
+                        'Name': name,
+                        'Market': market_name,
+                        'MarCap': marcap_val * 100000000 # 원 단위 환산
+                    })
+                else:
+                    break # 시총 순 정렬이므로 2천억 미만이 나오면 해당 시장 종료
+                    
+    return pd.DataFrame(stocks), 'MarCap'
 
 df_base, marcap_column = get_base_stocks()
 st.sidebar.info(f"현재 분석 대상 종목 (시총 2천억 이상): **{len(df_base)}개**")
@@ -62,12 +95,10 @@ with col1:
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=365 * 2)
         
-        # 웹화면 진행바 생성
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for i, (index, row) in enumerate(df_base.iterrows()):
-            # 진행률 업데이트
             pct = int((i + 1) / len(df_base) * 100)
             progress_bar.progress(pct)
             status_text.text(f"분석 중: {row['Name']} ({i+1}/{len(df_base)})")
@@ -81,17 +112,17 @@ with col1:
                 ma10 = df['Close'].rolling(10).mean().iloc[-1]
                 ma20 = df['Close'].rolling(20).mean().iloc[-1]
                 
-                # 조건 A (바닥권): 1년 최고가 대비 많이 떨어졌고 최저가 부근
+                # 조건 A (바닥권)
                 price_1y = df['Close'].tail(240)
                 max_1y = price_1y.max()
                 min_1y = price_1y.min()
                 is_bottom = (current_price < max_1y * 0.6) and (current_price < min_1y * 1.25)
                 
-                # 조건 B (횡보): 최근 90일 박스권 변동성 20% 이내
+                # 조건 B (횡보)
                 price_recent = df['Close'].tail(90)
                 is_sideways = ((price_recent.max() - price_recent.min()) / price_recent.min()) < 0.20
                 
-                # 조건 C (이평선 밀집): 5, 10, 20일선 간격 4% 이내
+                # 조건 C (이평선 밀집)
                 ma_list = [ma5, ma10, ma20]
                 is_ma_converged = ((max(ma_list) - min(ma_list)) / min(ma_list)) < 0.04
                 
@@ -138,7 +169,7 @@ with col2:
                 df_daily['RSI_Daily'] = calculate_rsi(df_daily['Close'], period=14)
                 rsi_daily_now = df_daily['RSI_Daily'].iloc[-1]
                 
-                # 주봉 RSI 변환 계산
+                # 주봉 RSI 변환
                 df_weekly = df_daily.resample('W').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'})
                 df_weekly['RSI_Weekly'] = calculate_rsi(df_weekly['Close'], period=14)
                 rsi_weekly_now = df_weekly['RSI_Weekly'].iloc[-1]
