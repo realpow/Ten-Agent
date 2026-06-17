@@ -1,2 +1,5 @@
+streamlit
 finance-datareader
+pykrx
 pandas
+requests
