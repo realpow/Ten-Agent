@@ -2,68 +2,80 @@ import streamlit as st
 import FinanceDataReader as fdr
 import pandas as pd
 import datetime
-import time
+import requests
+import re
 
 st.set_page_config(layout="wide", page_title="홍환의 투자전문 AI Agent")
 st.title("🤖 홍환의 투자전문 AI Agent")
 
-# 1. 시총 2천억 이상 리스트 (캐싱)
+# 1. 시총 2천억 이상 리스트 실시간 수집 (캐싱)
 @st.cache_data(ttl=86400)
 def get_base_stocks():
-    # 실제 환경에서는 FinanceDataReader의 스크리너 기능 등을 사용
-    # 여기서는 샘플로 100개만 설정하여 테스트 (추후 전체로 확장 가능)
-    return pd.DataFrame([{'Code': f'005930', 'Name': '삼성전자'}]) # 실제 데이터 호출로 변경 필요
+    stocks = []
+    # 페이지를 돌며 종목 추출
+    for page in range(1, 5): # 테스트를 위해 5페이지로 제한, 전체는 25페이지 이상
+        url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok=0&page={page}"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        codes = re.findall(r'/item/main\.naver\?code=(\d{6})', res.text)
+        names = re.findall(r'class="tltle">([^<]+)</a>', res.text)
+        for c, n in zip(codes, names):
+            stocks.append({'Code': c, 'Name': n})
+    return pd.DataFrame(stocks).drop_duplicates()
 
-# 2. 분석 함수 (프로그레스 바 포함)
+# 2. 분석 함수 (모든 전략 로직 반영)
 def analyze_with_progress(num):
     df = get_base_stocks()
     total = len(df)
     results = []
     
-    # 프로그레스 바와 텍스트 상태 창 생성
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for i, (_, row) in enumerate(df.iterrows()):
-        # 진행상황 업데이트
-        progress_bar.progress((i + 1) / total)
-        status_text.text(f"📊 검색 중... [{num}번 전략] {i+1} / {total}개 종목 진행 중 ({row['Name']})")
-        
-        # 분석 로직 (기존 로직 사용)
-        try:
-            # 여기에 각 전략별 로직 실행
-            time.sleep(0.05) # 서버 부하 방지용 딜레이
-            results.append(row) 
-        except: continue
+    end = datetime.date.today()
+    start = end - datetime.timedelta(days=365)
     
-    status_text.text(f"✅ 검색 완료! 총 {len(results)}개 종목 발견.")
+    for i, (_, row) in enumerate(df.iterrows()):
+        progress_bar.progress((i + 1) / total)
+        status_text.text(f"📊 {num}번 전략 분석 중: {i+1}/{total} ({row['Name']})")
+        
+        try:
+            d = fdr.DataReader(row['Code'], start, end)
+            if len(d) < 100: continue
+            
+            curr = d['Close'].iloc[-1]
+            ma20 = d['Close'].rolling(20).mean().iloc[-1]
+            
+            # 전략 로직
+            if num == 1 and curr < d['Close'].max() * 0.6: # 찰리멍거
+                results.append(row)
+            elif num == 2 and (d['Close'].diff().clip(lower=0).rolling(14).mean() / -d['Close'].diff().clip(upper=0).rolling(14).mean() < 0.5): # RSI 과매도
+                results.append(row)
+            elif num == 3 and d['Volume'].iloc[-1] > d['Volume'].rolling(20).mean().iloc[-1] * 5: # 거래량 급증
+                results.append(row)
+            elif num == 5 and curr > (ma20 + d['Close'].rolling(20).std().iloc[-1] * 2): # 볼린저
+                results.append(row)
+            elif num == 6 and curr < ma20 * 0.8: # 엔벨로프
+                results.append(row)
+        except: continue
+        
+    progress_bar.empty()
+    status_text.text(f"✅ 완료! {len(results)}개 종목 발견.")
     return pd.DataFrame(results)
 
-# 3. 탭 구성
+# 3. 메인 UI
 tab1, tab2, tab3 = st.tabs(["최신뉴스", "Study", "조건검색"])
-
 with tab3:
     left, right = st.columns([1, 4])
-    
     with left:
         strategies = {1: "1. 장기 바닥 횡보", 2: "2. RSI 과매도", 3: "3. 거래량 급증", 
                       4: "4. 가성비 우량주", 5: "5. 볼린저 상단", 6: "6. 엔벨로프 낙폭"}
-        
         for num, name in strategies.items():
             if st.button(name):
                 st.session_state.choice = num
-                st.rerun() # 클릭 시 즉시 화면 갱신
-        
-        if st.button("🚀 자동 전체 검색"):
-            for i in range(1, 7):
-                st.session_state[f"result_{i}"] = analyze_with_progress(i)
-
+                st.rerun()
     with right:
         if 'choice' in st.session_state:
             num = st.session_state.choice
-            st.subheader(f"📊 {strategies[num]} 분석 결과")
-            # 캐싱된 결과가 있으면 즉시 보여줌
-            if f"result_{num}" not in st.session_state:
-                st.session_state[f"result_{num}"] = analyze_with_progress(num)
-            
-            st.dataframe(st.session_state[f"result_{num}"], use_container_width=True)
+            # 캐시를 활용한 결과 호출
+            res = analyze_with_progress(num) 
+            st.dataframe(res)
