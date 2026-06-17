@@ -24,7 +24,7 @@ def get_base_stocks():
                 stocks.append({'Code': c, 'Name': n})
     return pd.DataFrame(stocks).drop_duplicates()
 
-# 2. 분석 핵심 로직
+# 2. 분석 핵심 로직 수정필요
 def run_strategy(df, strategy_num):
     results = []
     total = len(df)
