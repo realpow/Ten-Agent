@@ -6,18 +6,14 @@ import requests
 import re
 
 st.set_page_config(layout="wide", page_title="홍환의 투자전문 AI Agent")
-
-# 1. 타이틀 및 날짜 표시
 st.title("🤖 홍환의 투자전문 AI Agent")
-today = datetime.date.today().strftime("%Y년 %m월 %d일")
-st.markdown(f"**기준일자: {today}**")
+st.markdown(f"**기준일자: {datetime.date.today().strftime('%Y년 %m월 %d일')}**")
 st.markdown("---")
 
-# 2. 전 종목 수집 (캐싱 적용)
+# 1. 전 종목 수집 (캐싱)
 @st.cache_data(ttl=43200)
 def get_base_stocks():
     stocks = []
-    # 페이지 범위 1~25 (전 종목)
     for sosok in [0, 1]:
         for page in range(1, 25):
             url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
@@ -28,22 +24,18 @@ def get_base_stocks():
                 stocks.append({'Code': c, 'Name': n})
     return pd.DataFrame(stocks).drop_duplicates()
 
-# 3. 전략별 독립 캐싱 분석 함수 (버튼 연타 방지)
-@st.cache_data(ttl=43200)
-def run_strategy_cached(strategy_num):
-    df = get_base_stocks()
+# 2. 분석 핵심 로직
+def run_strategy(df, strategy_num):
     results = []
     total = len(df)
-    
-    # 분석 상태 표시창
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     end = datetime.date.today()
     for i, (_, row) in enumerate(df.iterrows()):
-        if i % 20 == 0:
+        if i % 25 == 0: 
             progress_bar.progress((i + 1) / total)
-            status_text.text(f"📊 전략 {strategy_num} 분석 중: {i+1} / {total}개 종목")
+            status_text.text(f"📊 분석 진행중: {i+1} / {total} ({row['Name']})")
         
         try:
             d = fdr.DataReader(row['Code'], end - datetime.timedelta(days=150))
@@ -66,18 +58,20 @@ def run_strategy_cached(strategy_num):
         except: continue
     
     progress_bar.empty()
-    status_text.text(f"✅ 전략 {strategy_num} 분석 완료! 총 {len(results)}개 발견.")
+    status_text.text(f"✅ 분석 완료! 총 {len(results)}개 종목 발견.")
     return pd.DataFrame(results)
 
-# 4. 레이아웃 (왼쪽 버튼, 오른쪽 결과)
+# 3. 레이아웃: [조건 검색] 버튼 배치
 left_col, right_col = st.columns([1, 4])
+df_base = get_base_stocks()
 
 with left_col:
-    st.subheader("⚙️ 조건 검색")
-    strategies = {1: "👴 1. 바닥 횡보", 2: "📉 2. RSI 과매도", 3: "🚀 3. 거래량 급증", 
-                  4: "💎 4. 가성비 우량주", 5: "💥 5. 볼린저 돌파", 6: "🛡️ 6. 엔벨로프 타점"}
+    st.subheader("🔍 조건 검색")
+    # 전략 리스트
+    conditions = {1: "1. 바닥 횡보 (찰리멍거)", 2: "2. RSI 과매도", 3: "3. 거래량 급증", 
+                  4: "4. 가성비 우량주", 5: "5. 볼린저 밴드 상단", 6: "6. 엔벨로프 낙폭과대"}
     
-    for num, name in strategies.items():
+    for num, name in conditions.items():
         if st.button(name, key=f"btn_{num}"):
             st.session_state.choice = num
 
@@ -85,10 +79,12 @@ with right_col:
     st.subheader("📊 분석 결과 시트")
     if 'choice' in st.session_state:
         num = st.session_state.choice
+        # 맨 아래줄: 선택한 전략의 상세 조건 설명
+        st.markdown(f"**현재 검색 조건:** `{conditions[num]}`")
+        
         if num == 4:
-            st.info("전략 4번은 현재 재무 데이터 업데이트 대기 중입니다.")
+            st.info("전략 4번은 업데이트 대기 중입니다.")
         else:
-            result_df = run_strategy_cached(num)
-            st.dataframe(result_df, use_container_width=True)
+            st.dataframe(run_strategy(df_base, num), use_container_width=True)
     else:
-        st.info("왼쪽에서 분석할 조건을 선택해주세요.")
+        st.info("왼쪽에서 검색할 조건을 선택해주세요.")
