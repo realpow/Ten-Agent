@@ -20,169 +20,238 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # 타이틀 및 소개
-st.title("🤖 홍환님의 AI 종합 투자 에이전트")
+st.title("🤖 홍환님의 AI 종합 투자 전문 에이전트 v2.0")
 st.markdown("---")
-st.sidebar.header("⚙️ 검색 설정")
-st.sidebar.write("두 가지 퀀트 엔진 중 원하는 전략의 버튼을 누르면 전 종목을 실시간 분석합니다.")
+st.sidebar.header("⚙️ 시스템 제어판")
+st.sidebar.write("원하는 투자 전략 버튼을 누르면 시총 2천억 이상 기업 전 종목을 실시간 퀀트 분석합니다.")
 
-# [💡 우회 패치] 클라우드 서버 차단을 막기 위해 네이버 금융을 통해 시총 2천억 이상 안정적 수집
-@st.cache_data(ttl=3600) # 1시간 동안 데이터 캐싱
+# [💡 성능 고도화] 기본 주식 정보 수집 시 PER, ROE까지 초고속 동시 수집
+@st.cache_data(ttl=3600)
 def get_base_stocks():
     stocks = []
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
     for sosok in [0, 1]: # 0: 코스피, 1: 코스닥
         market_name = 'KOSPI' if sosok == 0 else 'KOSDAQ'
-        for page in range(1, 25): # 상위 페이지 집중 탐색
+        for page in range(1, 25): # 시총 상위권 집중 수집
             url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
             res = requests.get(url, headers=headers)
             html = res.content.decode('euc-kr', errors='ignore')
             
-            # 6자리 종목코드와 종목명 추출
             page_codes = re.findall(r'href="/item/main\.naver\?code=(\d{6})"[^>]* class="tltle">([^<]+)</a>', html)
-            if not page_codes:
-                break
+            if not page_codes: break
                 
-            # 테이블 파싱
             dfs = pd.read_html(io.StringIO(html))
             df_table = dfs[1].dropna(subset=['종목명'])
             
-            # 시가총액 컬럼 매칭
-            marcap_col = None
-            for c in df_table.columns:
-                if '시가총액' in str(c):
-                    marcap_col = c
-                    break
+            # 컬럼 매칭 (시가총액, PER, ROE)
+            marcap_col = next((c for c in df_table.columns if '시가총액' in str(c)), None)
+            per_col = next((c for c in df_table.columns if 'PER' in str(c)), None)
+            roe_col = next((c for c in df_table.columns if 'ROE' in str(c)), None)
             
-            # 코드와 데이터 결합 및 2천억 필터링
             for (code, name), (_, row) in zip(page_codes, df_table.iterrows()):
                 marcap_val = row[marcap_col] if marcap_col else 0
                 if pd.isna(marcap_val): continue
                 
                 if isinstance(marcap_val, str):
                     marcap_val = int(re.sub(r'[^0-9]', '', marcap_val))
-                elif isinstance(marcap_val, (int, float)):
+                else:
                     marcap_val = int(marcap_val)
                 
-                # 네이버 시가총액 단위는 '억 원'이므로 2000(억) 이상만 필터링
+                # 네이버 단위 '억 원' 기준 2,000억 이상 조건
                 if marcap_val >= 2000:
+                    # PER, ROE 정제
+                    try: per_float = float(row[per_col]) if per_col and not pd.isna(row[per_col]) else None
+                    except: per_float = None
+                    try: roe_float = float(row[roe_col]) if roe_col and not pd.isna(row[roe_col]) else None
+                    except: roe_float = None
+                    
                     stocks.append({
-                        'Code': code,
-                        'Name': name,
-                        'Market': market_name,
-                        'MarCap': marcap_val * 100000000 # 원 단위 환산
+                        'Code': code, 'Name': name, 'Market': market_name,
+                        'MarCap': marcap_val * 100000000, 'PER': per_float, 'ROE': roe_float
                     })
                 else:
-                    break # 시총 순 정렬이므로 2천억 미만이 나오면 해당 시장 종료
-                    
-    return pd.DataFrame(stocks), 'MarCap'
+                    break
+    return pd.DataFrame(stocks)
 
-df_base, marcap_column = get_base_stocks()
-st.sidebar.info(f"현재 분석 대상 종목 (시총 2천억 이상): **{len(df_base)}개**")
-
-# 화면을 반으로 쪼개서 버튼 배치하기
-col1, col2 = st.columns(2)
+df_base = get_base_stocks()
+st.sidebar.info(f"현재 실시간 분석 대상 종목: **{len(df_base)}개**")
 
 # ----------------------------------------------------
-# 👴 버튼 1: 찰리 멍거 바닥 횡보주 검색 엔진
+# 🏢 대시보드 화면 배치 (3개 컬럼씩 2줄 격자 구조)
 # ----------------------------------------------------
-with col1:
-    st.subheader("👴 1. 찰리 멍거 스타일 바닥 횡보주")
-    st.caption("최소 3개월~2년간 바닥권에서 에너지를 모으며 장기 횡보하는 종목")
-    
-    if st.button("🔍 바닥 횡보주 검색 시작"):
-        munger_stocks = []
+row1_col1, row1_col2, row1_col3 = st.columns(3)
+row2_col1, row2_col2, row2_col3 = st.columns(3)
+
+# --- [상단 1열] 찰리 멍거 바닥 횡보주 ---
+with row1_col1:
+    st.subheader("👴 1. 찰리멍거 바닥 횡보")
+    st.caption("3개월~2년간 바닥권 밀집 장기 횡보 기업")
+    if st.button("🔍 바닥 횡보주 검색"):
+        results = []
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=365 * 2)
+        p_bar = st.progress(0); s_text = st.empty()
         
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i, (index, row) in enumerate(df_base.iterrows()):
-            pct = int((i + 1) / len(df_base) * 100)
-            progress_bar.progress(pct)
-            status_text.text(f"분석 중: {row['Name']} ({i+1}/{len(df_base)})")
-            
+        for i, (_, row) in enumerate(df_base.iterrows()):
+            p_bar.progress(int((i + 1) / len(df_base) * 100))
+            s_text.text(f"분석: {row['Name']}")
             try:
                 df = fdr.DataReader(row['Code'], start_date, end_date)
                 if len(df) < 250: continue
-                    
-                current_price = int(df['Close'].iloc[-1])
-                ma5 = df['Close'].rolling(5).mean().iloc[-1]
-                ma10 = df['Close'].rolling(10).mean().iloc[-1]
-                ma20 = df['Close'].rolling(20).mean().iloc[-1]
-                
-                # 조건 A (바닥권)
+                current = int(df['Close'].iloc[-1])
                 price_1y = df['Close'].tail(240)
-                max_1y = price_1y.max()
-                min_1y = price_1y.min()
-                is_bottom = (current_price < max_1y * 0.6) and (current_price < min_1y * 1.25)
-                
-                # 조건 B (횡보)
-                price_recent = df['Close'].tail(90)
-                is_sideways = ((price_recent.max() - price_recent.min()) / price_recent.min()) < 0.20
-                
-                # 조건 C (이평선 밀집)
-                ma_list = [ma5, ma10, ma20]
-                is_ma_converged = ((max(ma_list) - min(ma_list)) / min(ma_list)) < 0.04
-                
-                if is_bottom and is_sideways and is_ma_converged:
-                    munger_stocks.append({
-                        "종목코드": row['Code'], "종목명": row['Name'], "시장": row['Market'],
-                        "현재가": current_price, "5일선": round(ma5), "10일선": round(ma10), "20일선": round(ma20)
-                    })
+                if current < price_1y.max() * 0.6 and current < price_1y.min() * 1.25:
+                    price_recent = df['Close'].tail(90)
+                    if ((price_recent.max() - price_recent.min()) / price_recent.min()) < 0.20:
+                        ma5 = df['Close'].rolling(5).mean().iloc[-1]
+                        ma10 = df['Close'].rolling(10).mean().iloc[-1]
+                        ma20 = df['Close'].rolling(20).mean().iloc[-1]
+                        if ((max([ma5, ma10, ma20]) - min([ma5, ma10, ma20])) / min([ma5, ma10, ma20])) < 0.04:
+                            results.append({"종목코드": row['Code'], "종목명": row['Name'], "시장": row['Market'], "현재가": current})
             except: continue
-            
-        status_text.success("✅ 검색 완료!")
-        if munger_stocks:
-            st.dataframe(pd.DataFrame(munger_stocks), use_container_width=True)
-        else:
-            st.warning("😭 조건에 맞는 바닥 횡보 종목이 현재 없습니다.")
+        s_text.success("✅ 완료!")
+        st.dataframe(pd.DataFrame(results) if results else "조건에 맞는 종목이 없습니다.", use_container_width=True)
 
-# ----------------------------------------------------
-# 📉 버튼 2: 일봉/주봉 RSI 과매도 검색 엔진
-# ----------------------------------------------------
-with col2:
-    st.subheader("📉 2. 일봉 & 주봉 RSI 동시 과매도")
-    st.caption("일봉 RSI 25 이하 이면서 주봉 RSI 30 이하인 낙폭 과대 보물주")
-    
-    if st.button("🔍 RSI 과매도주 검색 시작"):
-        rsi_stocks = []
+# --- [상단 2열] 일봉/주봉 RSI 과매도 ---
+with row1_col2:
+    st.subheader("📉 2. 일봉&주봉 RSI 과매도")
+    st.caption("일봉 RSI 25 이하 & 주봉 RSI 30 이하 과매도")
+    if st.button("🔍 RSI 과매도주 검색"):
+        results = []
         end_date = datetime.date.today()
         start_date = end_date - datetime.timedelta(days=365 * 2)
+        p_bar = st.progress(0); s_text = st.empty()
         
-        progress_bar2 = st.progress(0)
-        status_text2 = st.empty()
-        
-        for i, (index, row) in enumerate(df_base.iterrows()):
-            pct = int((i + 1) / len(df_base) * 100)
-            progress_bar2.progress(pct)
-            status_text2.text(f"분석 중: {row['Name']} ({i+1}/{len(df_base)})")
-            
+        for i, (_, row) in enumerate(df_base.iterrows()):
+            p_bar.progress(int((i + 1) / len(df_base) * 100))
+            s_text.text(f"분석: {row['Name']}")
             try:
                 df_daily = fdr.DataReader(row['Code'], start_date, end_date)
                 if len(df_daily) < 100: continue
-                    
-                current_price = int(df_daily['Close'].iloc[-1])
+                df_daily['RSI'] = calculate_rsi(df_daily['Close'], 14)
+                rsi_d = df_daily['RSI'].iloc[-1]
                 
-                # 일봉 RSI
-                df_daily['RSI_Daily'] = calculate_rsi(df_daily['Close'], period=14)
-                rsi_daily_now = df_daily['RSI_Daily'].iloc[-1]
+                df_weekly = df_daily.resample('W').agg({'Close': 'last'})
+                df_weekly['RSI_W'] = calculate_rsi(df_weekly['Close'], 14)
+                rsi_w = df_weekly['RSI_W'].iloc[-1]
                 
-                # 주봉 RSI 변환
-                df_weekly = df_daily.resample('W').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'})
-                df_weekly['RSI_Weekly'] = calculate_rsi(df_weekly['Close'], period=14)
-                rsi_weekly_now = df_weekly['RSI_Weekly'].iloc[-1]
+                if rsi_d <= 25 and rsi_w <= 30:
+                    results.append({"종목코드": row['Code'], "종목명": row['Name'], "현재가": int(df_daily['Close'].iloc[-1]), "일봉RSI": round(rsi_d,1), "주봉RSI": round(rsi_w,1)})
+            except: continue
+        s_text.success("✅ 완료!")
+        st.dataframe(pd.DataFrame(results) if results else "조건에 맞는 종목이 없습니다.", use_container_width=True)
+
+# --- [상단 3열] 거래량 분출 정배열 초입 (신규 전략 1) ---
+with row1_col3:
+    st.subheader("🚀 3. 거래량 분출 정배열 초입")
+    st.caption("이평선 정배열(5>20>60) 돌파 + 전일비 거래량 200% 폭발")
+    if st.button("🔍 정배열 초입주 검색"):
+        results = []
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=150)
+        p_bar = st.progress(0); s_text = st.empty()
+        
+        for i, (_, row) in enumerate(df_base.iterrows()):
+            p_bar.progress(int((i + 1) / len(df_base) * 100))
+            s_text.text(f"분석: {row['Name']}")
+            try:
+                df = fdr.DataReader(row['Code'], start_date, end_date)
+                if len(df) < 65: continue
                 
-                if rsi_daily_now <= 25 and rsi_weekly_now <= 30:
-                    rsi_stocks.append({
-                        "종목코드": row['Code'], "종목명": row['Name'], "시장": row['Market'],
-                        "현재가": current_price, "일봉 RSI": round(rsi_daily_now, 2), "주봉 RSI": round(rsi_weekly_now, 2)
+                ma5 = df['Close'].rolling(5).mean().iloc[-1]
+                ma20 = df['Close'].rolling(20).mean().iloc[-1]
+                ma60 = df['Close'].rolling(60).mean().iloc[-1]
+                
+                vol_ma5 = df['Volume'].rolling(5).mean().iloc[-2] # 직전 5일 평균 거래량
+                today_vol = df['Volume'].iloc[-1]
+                current_price = df['Close'].iloc[-1]
+                
+                # 조건: 정배열 구조 형성 및 오늘 종가가 5일선 위에 안착 + 거래량 평소대비 2배 폭발 (세력 진입 추정)
+                if ma5 > ma20 and ma20 > ma60 and current_price > ma5:
+                    if today_vol > vol_ma5 * 2 and df['Change'].iloc[-1] > 0:
+                        results.append({"종목코드": row['Code'], "종목명": row['Name'], "현재가": int(current_price), "당일등락률(%)": round(df['Change'].iloc[-1]*100, 2)})
+            except: continue
+        s_text.success("✅ 완료!")
+        st.dataframe(pd.DataFrame(results) if results else "조건에 맞는 종목이 없습니다.", use_container_width=True)
+
+
+# --- [하단 1열] 가성비 알짜 우량주 (신규 전략 2) ---
+with row2_col1:
+    st.subheader("💎 4. 가성비 알짜 우량주")
+    st.caption("ROE 10% 이상 고성장 & PER 15배 이하 철저 저평가 알짜주")
+    if st.button("🔍 가성비 우량주 추출"):
+        # 미리 수집된 베이스 데이터에서 즉시 필터링하므로 루프 없이 초고속 가동!
+        filtered = df_base[(df_base['ROE'] >= 10) & (df_base['PER'] > 0) & (df_base['PER'] <= 15)]
+        filtered = filtered.sort_values(by='ROE', ascending=False) # 고ROE 순 정렬
+        
+        results = filtered[['Code', 'Name', 'Market', 'PER', 'ROE']].rename(
+            columns={'Code': '종목코드', 'Name': '종목명', 'Market': '시장', 'PER': 'PER(배)', 'ROE': 'ROE(%)'}
+        )
+        st.success("✅ 즉시 추출 완료!")
+        st.dataframe(results if not results.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
+
+# --- [하단 2열] 볼린저 밴드 상단 돌파 (신규 전략 3) ---
+with row2_col2:
+    st.subheader("💥 5. 볼린저 밴드 상단 돌파")
+    st.caption("변동성 상단(20, 2) 강한 돌파 + 거래량 급증 대시세 신호")
+    if st.button("🔍 볼린저 돌파주 검색"):
+        results = []
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=100)
+        p_bar = st.progress(0); s_text = st.empty()
+        
+        for i, (_, row) in enumerate(df_base.iterrows()):
+            p_bar.progress(int((i + 1) / len(df_base) * 100))
+            s_text.text(f"분석: {row['Name']}")
+            try:
+                df = fdr.DataReader(row['Code'], start_date, end_date)
+                if len(df) < 25: continue
+                
+                ma20 = df['Close'].rolling(20).mean()
+                std20 = df['Close'].rolling(20).std()
+                upper_bb = ma20 + (std20 * 2)
+                
+                current_price = df['Close'].iloc[-1]
+                prev_price = df['Close'].iloc[-2]
+                
+                # 오늘 상단밴드 돌파, 어제는 상단밴드 아래였던 종목 + 거래량 폭발
+                if current_price > upper_bb.iloc[-1] and prev_price <= upper_bb.iloc[-2]:
+                    vol_ma5 = df['Volume'].rolling(5).mean().iloc[-2]
+                    if df['Volume'].iloc[-1] > vol_ma5 * 2.5:
+                        results.append({"종목코드": row['Code'], "종목명": row['Name'], "현재가": int(current_price), "상단밴드가": round(upper_bb.iloc[-1])})
+            except: continue
+        s_text.success("✅ 완료!")
+        st.dataframe(pd.DataFrame(results) if results else "조건에 맞는 종목이 없습니다.", use_container_width=True)
+
+# --- [하단 3열] 엔벨로프 낙폭과대 타점 (신규 전략 4) ---
+with row2_col3:
+    st.subheader("🛡️ 6. 엔벨로프 낙폭과대 타점")
+    st.caption("20일 이평선 대비 -15% 이하 이격 발생, 기계적 반등 유력 타점")
+    if st.button("🔍 엔벨로프 타점 검색"):
+        results = []
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=100)
+        p_bar = st.progress(0); s_text = st.empty()
+        
+        for i, (_, row) in enumerate(df_base.iterrows()):
+            p_bar.progress(int((i + 1) / len(df_base) * 100))
+            s_text.text(f"분석: {row['Name']}")
+            try:
+                df = fdr.DataReader(row['Code'], start_date, end_date)
+                if len(df) < 25: continue
+                
+                ma20 = df['Close'].rolling(20).mean().iloc[-1]
+                envelope_lower = ma20 * (1 - 0.15) # 하단 지지선 (-15% 이격)
+                current_price = df['Close'].iloc[-1]
+                
+                # 현재가가 엔벨로프 하단선보다 밑으로 떨어진 극단적 과매도주 포착
+                if current_price <= envelope_lower:
+                    disparity = (current_price / ma20) * 100
+                    results.append({
+                        "종목코드": row['Code'], "종목명": row['Name'], 
+                        "현재가": int(current_price), "20일선": round(ma20), "이격률(%)": round(disparity, 1)
                     })
             except: continue
-            
-        status_text2.success("✅ 검색 완료!")
-        if rsi_stocks:
-            st.dataframe(pd.DataFrame(rsi_stocks), use_container_width=True)
-        else:
-            st.warning("😭 조건에 맞는 RSI 과매도 종목이 현재 없습니다.")
+        s_text.success("✅ 완료!")
+        st.dataframe(pd.DataFrame(results) if results else "조건에 맞는 종목이 없습니다.", use_container_width=True)
