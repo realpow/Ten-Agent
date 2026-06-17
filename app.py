@@ -59,8 +59,6 @@ today_str = datetime.date.today().strftime('%Y-%m-%d')
 df_base = get_base_stocks(today_str)
 st.sidebar.info(f"오늘의 분석 대상 종목: **{len(df_base)}개**")
 
-# --- 🚀 [핵심 업그레이드] 6대 전략 연산 로직 전체 캐싱 처리 (오늘 날짜가 바뀌지 않으면 연산 생략) ---
-
 @st.cache_data(ttl=43200)
 def analyze_strategy_1(df, target_date):
     results = []
@@ -159,99 +157,3 @@ def analyze_strategy_4(df, target_date):
                 op_1y = clean_num(df_fin.loc[op_idx, annual_cols[2]])
                 if rev_3y: stock_info["3년전 매출액"] = int(rev_3y)
                 if rev_2y: stock_info["2년전 매출액"] = int(rev_2y)
-                if rev_1y: stock_info["1년전 매출액"] = int(rev_1y)
-                if op_3y: stock_info["3년전 영업이익"] = int(op_3y)
-                if op_2y: stock_info["2년전 영업이익"] = int(op_2y)
-                if op_1y: stock_info["1년전 영업이익"] = int(op_1y)
-                if rev_3y and rev_2y and rev_3y != 0: stock_info["매출액 성장률(2년전)(%)"] = round(((rev_2y - rev_3y) / rev_3y) * 100, 2)
-                if op_3y and op_2y and op_3y != 0: stock_info["영업이익 성장률(2년전)(%)"] = round(((op_2y - op_3y) / abs(op_3y)) * 100, 2)
-                if rev_2y and rev_1y and rev_2y != 0: stock_info["매출액 성장률(1년전)(%)"] = round(((rev_1y - rev_2y) / rev_2y) * 100, 2)
-                if op_2y and op_1y and op_2y != 0: stock_info["영업이익 성장률(1년전)(%)"] = round(((op_1y - op_2y) / abs(op_2y)) * 100, 2)
-        except: pass
-        advanced_results.append(stock_info)
-    df_final = pd.DataFrame(advanced_results)
-    if not df_final.empty:
-        col_order = ["종목코드", "종목명", "시장", "PER(배)", "ROE(%)", "3년전 매출액", "2년전 매출액", "1년전 매출액", "매출액 성장률(2년전)(%)", "매출액 성장률(1년전)(%)", "3년전 영업이익", "2년전 영업이익", "1년전 영업이익", "영업이익 성장률(2년전)(%)", "영업이익 성장률(1년전)(%)"]
-        df_final = df_final[col_order]
-        df_final['sort_helper'] = pd.to_numeric(df_final['영업이익 성장률(1년전)(%)'], errors='coerce').fillna(-99999)
-        df_final = df_final.sort_values(by='sort_helper', ascending=False).drop(columns=['sort_helper'])
-    return df_final
-
-@st.cache_data(ttl=43200)
-def analyze_strategy_5(df, target_date):
-    results = []
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=100)
-    for _, row in df.iterrows():
-        try:
-            stock_df = fdr.DataReader(row['Code'], start_date, end_date)
-            if len(stock_df) < 25: continue
-            ma20 = stock_df['Close'].rolling(20).mean()
-            std20 = stock_df['Close'].rolling(20).std()
-            upper_bb = ma20 + (std20 * 2)
-            current_price = stock_df['Close'].iloc[-1]
-            prev_price = stock_df['Close'].iloc[-2]
-            if current_price > upper_bb.iloc[-1] and prev_price <= upper_bb.iloc[-2]:
-                vol_ma5 = stock_df['Volume'].rolling(5).mean().iloc[-2]
-                if stock_df['Volume'].iloc[-1] > vol_ma5 * 2.5:
-                    results.append({"종목코드": row['Code'], "종목명": row['Name'], "현재가": int(current_price), "상단밴드가": round(upper_bb.iloc[-1])})
-        except: continue
-    return pd.DataFrame(results)
-
-@st.cache_data(ttl=43200)
-def analyze_strategy_6(df, target_date):
-    results = []
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=100)
-    for _, row in df.iterrows():
-        try:
-            stock_df = fdr.DataReader(row['Code'], start_date, end_date)
-            if len(stock_df) < 25: continue
-            ma20 = stock_df['Close'].rolling(20).mean().iloc[-1]
-            envelope_lower = ma20 * (1 - 0.15)
-            current_price = stock_df['Close'].iloc[-1]
-            if current_price <= envelope_lower:
-                disparity = (current_price / ma20) * 100
-                results.append({"종목코드": row['Code'], "종목명": row['Name'], "현재가": int(current_price), "20일선": round(ma20), "이격률(%)": round(disparity, 1)})
-        except: continue
-    return pd.DataFrame(results)
-
-# --- 🏢 대시보드 레이아웃 구성 ---
-row1_col1, row1_col2, row1_col3 = st.columns(3)
-row2_col1, row2_col2, row2_col3 = st.columns(3)
-
-with row1_col1:
-    st.subheader("👴 1. 찰리멍거 바닥 횡보")
-    if st.button("🔍 바닥 횡보주 검색"):
-        res = analyze_strategy_1(df_base, today_str)
-        st.dataframe(res if not res.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
-
-with row1_col2:
-    st.subheader("📉 2. 일봉&주봉 RSI 과매도")
-    if st.button("🔍 RSI 과매도주 검색"):
-        res = analyze_strategy_2(df_base, today_str)
-        st.dataframe(res if not res.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
-
-with row1_col3:
-    st.subheader("🚀 3. 거래량 분출 정배열 초입")
-    if st.button("🔍 정배열 초입주 검색"):
-        res = analyze_strategy_3(df_base, today_str)
-        st.dataframe(res if not res.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
-
-with row2_col1:
-    st.subheader("💎 4. 가성비 알짜 우량주")
-    if st.button("🔍 가성비 우량주 심층 분석"):
-        res = analyze_strategy_4(df_base, today_str)
-        st.dataframe(res if not res.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
-
-with row2_col2:
-    st.subheader("💥 5. 볼린저 밴드 상단 돌파")
-    if st.button("🔍 볼린저 돌파주 검색"):
-        res = analyze_strategy_5(df_base, today_str)
-        st.dataframe(res if not res.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
-
-with row2_col3:
-    st.subheader("🛡️ 6. 엔벨로프 낙폭과대 타점")
-    if st.button("🔍 엔벨로프 타점 검색"):
-        res = analyze_strategy_6(df_base, today_str)
-        st.dataframe(res if not res.empty else "조건에 맞는 종목이 없습니다.", use_container_width=True)
